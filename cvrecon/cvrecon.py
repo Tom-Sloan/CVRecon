@@ -4,18 +4,20 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import torchvision
+import os
 
 import torchsparse
 import torchsparse.nn.functional as spf
 import torch.nn.functional as F
 
-from cvrecon import cnn2d, cnn3d, mv_fusion, utils, view_direction_encoder, SR_encoder
+from cvrecon import cnn2d, cnn3d, mv_fusion, utils, view_direction_encoder
 from cvrecon.cost_volume import ResnetMatchingEncoder, FastFeatureVolumeManager, tensor_B_to_bM, tensor_bM_to_B, TensorFormatter
 
 
 class cvrecon(torch.nn.Module):
     def __init__(self, attn_heads, attn_layers, use_proj_occ, SRfeat, SR_vi_ebd, SRCV, use_cost_volume, cv_dim, cv_overall, depth_head):
         super().__init__()
+        
         self.use_proj_occ = use_proj_occ
         self.n_attn_heads = attn_heads
         self.resolutions = collections.OrderedDict(
@@ -58,8 +60,11 @@ class cvrecon(torch.nn.Module):
                 matching_dim_size=16,
                 num_source_views=8 - 1
             )
-            self.cost_volume.load_state_dict(torch.load('cv02.pth'), strict=False)
-            self.matching_encoder.load_state_dict(torch.load('me.pth'))
+
+            # first check if the files exist
+            if os.path.exists('cv02.pth') and os.path.exists('me.pth'):
+                self.cost_volume.load_state_dict(torch.load('cv02.pth'), strict=False)
+                self.matching_encoder.load_state_dict(torch.load('me.pth'))
 
             self.tensor_formatter = TensorFormatter()
 
@@ -82,8 +87,8 @@ class cvrecon(torch.nn.Module):
 
         prev_output_depth = 0
         for i, (resname, res) in enumerate(self.resolutions.items()):
-            if self.SRfeat:
-                self.sr_encoder[resname] = SR_encoder.SR_encoder(SRcha[i], cnn2d_output_depths[i]) # 1 by 1 conv to adapt SimpleRecon feat channel to required channel.
+            # if self.SRfeat:
+            #     self.sr_encoder[resname] = SR_encoder.SR_encoder(SRcha[i], cnn2d_output_depths[i]) # 1 by 1 conv to adapt SimpleRecon feat channel to required channel.
             self.view_embedders[resname] = view_direction_encoder.ViewDirectionEncoder(  # to encode camera viewing ray into 2dCNN feature
                     cnn2d_output_depths[i], L=4
                 )
@@ -224,7 +229,7 @@ class cvrecon(torch.nn.Module):
             src_world_T_cam = poses[:, i]
             cur_cam_T_world = batch["inv_pose"][:, i, ...]
             cur_world_T_cam = batch["pose"][:, i, ...]
-            with torch.cuda.amp.autocast(False):
+            with torch.autocast(device_type='cuda', dtype=torch.float32):
                 # Compute src_cam_T_cur_cam, a transformation for going from 3D 
                 # coords in current view coordinate frame to source view coords 
                 # coordinate frames.
@@ -258,7 +263,7 @@ class cvrecon(torch.nn.Module):
             # overallfeat = self.cv_global_encoder(overallfeat).view(list(cvs.shape[:2]) + [8, 1, cvs.shape[-2], cvs.shape[-1]])
             # overallfeat = overallfeat.expand([-1, -1, -1, cvs.shape[3], -1, -1])
 
-            ############################### complete overall feat ####################################################
+            ######################################## complete overall feat ####################################################
             # overallfeat = cvs[:, :, -1:, :, ...].permute(0, 1, 3, 2, 4, 5).expand([-1, -1, -1, cvs.shape[3], -1, -1])
 
             # # cvs = cvs[:, :, :-1, ...]
@@ -268,127 +273,221 @@ class cvrecon(torch.nn.Module):
 
 
     def forward(self, batch, voxel_inds_16):
-        bs, n_imgs = batch['depth_imgs'].shape[:2]
-        if self.use_cost_volume:
-            cost_volume, cv_masks = self.construct_cv(batch, n_imgs)
-            batch['rgb_imgs'] = batch['rgb_imgs'][:, :n_imgs]
-            for b in range(bs):
-                cost_volume[b][batch['cv_invalid_mask'][b].bool()] = 0
+        try:
+            print("\nCVRecon Forward Pass:")
+            print(f"Input batch keys: {batch.keys()}")
+            print(f"voxel_inds_16 shape: {voxel_inds_16.shape}")
 
-        if self.SRfeat:
-            feats_2d = self.get_SR_feats(batch["SRfeat0"], batch["SRfeat1"], batch["SRfeat2"]
-            , batch["proj_mats"], batch["cam_positions"])
-        else:
-            feats_2d = self.get_img_feats(
-                batch["rgb_imgs"], batch["proj_mats"], batch["cam_positions"]
-            )
-        
-        if not self.depth_head: depth_out = None
-    
-        device = voxel_inds_16.device
-        proj_occ_logits = {}
-        voxel_outputs = {}
-        bp_data = {}
-        n_subsample = {
-            "medium": 2 ** 14,
-            "fine": 2 ** 16,
-        }
+            bs, n_imgs = batch['depth_imgs'].shape[:2]
+            if self.use_cost_volume:
+                print("\nConstructing cost volume...")
+                cost_volume, cv_masks = self.construct_cv(batch, n_imgs)
+                print(f"Cost volume shape: {cost_volume.shape}")
+                print(f"CV masks shape: {cv_masks.shape}")
+                batch['rgb_imgs'] = batch['rgb_imgs'][:, :n_imgs]
 
-        voxel_inds = voxel_inds_16
-        voxel_features = torch.empty(
-            (len(voxel_inds), 0), dtype=feats_2d["coarse"].dtype, device=device
-        )
-        voxel_logits = torch.empty(
-            (len(voxel_inds), 0), dtype=feats_2d["coarse"].dtype, device=device
-        )
-        for resname, res in self.resolutions.items():
-            if self.training and resname in n_subsample:  # subsample voxels.
-                # this saves memory and possibly acts as a data augmentation
-                subsample_inds = get_subsample_inds(voxel_inds, n_subsample[resname])
-                voxel_inds = voxel_inds[subsample_inds]
-                voxel_features = voxel_features[subsample_inds]
-                voxel_logits = voxel_logits[subsample_inds]
-
-            voxel_batch_inds = voxel_inds[:, 3].long()
-            voxel_coords = voxel_inds[:, :3] * res + batch["origin"][voxel_batch_inds]  # convert to unit of meters
-
-            featheight, featwidth = feats_2d[resname].shape[-2:]
-
-            feat_cha = {'coarse': 80, 'medium': 40, 'fine':24}
-            cv_dim = self.cv_dim - 8
-            if resname != 'medium':
-                cur_cost_volume = F.interpolate(cost_volume.view([bs*n_imgs*cv_dim, 64, 60, 80]), [featheight, featwidth]).view([bs, n_imgs, cv_dim, 64, featheight, featwidth])
-            else: cur_cost_volume = cost_volume.clone()
-            feats_2d[resname] = self.cv_global_encoder[resname](torch.cat([cur_cost_volume[:,:,-1], feats_2d[resname]], dim=2).view([-1, feat_cha[resname]+64, featheight, featwidth]))
-            feats_2d[resname] = feats_2d[resname].view([bs, n_imgs, feat_cha[resname]+64, featheight, featwidth])
-            overallfeat = feats_2d[resname][:, :, :64].unsqueeze(3).expand([-1, -1, -1, 64, -1, -1])
-            feats_2d[resname] = feats_2d[resname][:,:,64:]
-            # for d in range(64):
-            #     cur_cost_volume[:,:,:,d] = self.unshared_conv[resname][d](
-            #                                 torch.cat([cur_cost_volume[:,:,:,d], feats_2d[resname]], dim=2).view([-1, feat_cha[resname]+7, featheight, featwidth])
-            #                                 ).view([bs, n_imgs, 7, featheight, featwidth])
-            cur_cost_volume = self.unshared_conv[resname](
-                torch.cat([feats_2d[resname].unsqueeze(3).expand([-1,-1,-1,64,-1,-1]), cur_cost_volume], dim=2).transpose(2,3).reshape(bs*n_imgs,-1,featheight, featwidth))
-            cur_cost_volume = cur_cost_volume.view([bs, n_imgs, 64, 7, featheight, featwidth]).transpose(2,3)
-
-            cur_cost_volume = torch.cat([overallfeat, cur_cost_volume], dim=2)
-
-            bp_uv, bp_depth, bp_mask = self.project_voxels(  # project voxels to each image plane
-                voxel_coords,
-                voxel_batch_inds,
-                batch["proj_mats"][resname].transpose(0, 1),
-                featheight,
-                featwidth,
-            )
-            bp_data[resname] = {
-                "voxel_coords": voxel_coords,
-                "voxel_batch_inds": voxel_batch_inds,
-                "bp_uv": bp_uv,
-                "bp_depth": bp_depth,
-                "bp_mask": bp_mask,
-            }
-            bp_feats, cur_proj_occ_logits = self.back_project_features(  # put 2dCNN features into voxels.
-                bp_data[resname],
-                feats_2d[resname].transpose(0, 1),
-                self.mv_fusion[resname],
-                cur_cost_volume if (self.SRCV or self.use_cost_volume) else None,
-                cv_masks if self.use_cost_volume else None,
-            )
-            proj_occ_logits[resname] = cur_proj_occ_logits
-
-            bp_feats = self.layer_norms[resname](bp_feats)
-
-            voxel_features = torch.cat((voxel_features, bp_feats, voxel_logits), dim=-1)  # not understood !!!!
-            voxel_features = torchsparse.SparseTensor(voxel_features, voxel_inds)
-            try:
-                voxel_features = self.cnns3d[resname](voxel_features)
-            except Exception as e:
-                print(e)
-                return voxel_outputs, proj_occ_logits, bp_data, depth_out
-
-            voxel_logits = self.output_layers[resname](voxel_features)
-            voxel_outputs[resname] = voxel_logits
-
-            if resname in ["coarse", "medium"]:
-                # sparsify & upsample
-                occupancy = voxel_logits.F.squeeze(1) > 0
-                if not torch.any(occupancy):
-                    return voxel_outputs, proj_occ_logits, bp_data, depth_out
-                voxel_features = self.upsampler.upsample_feats(
-                    voxel_features.F[occupancy]
+            if self.SRfeat:
+                feats_2d = self.get_SR_feats(batch["SRfeat0"], batch["SRfeat1"], batch["SRfeat2"]
+                , batch["proj_mats"], batch["cam_positions"])
+            else:
+                feats_2d = self.get_img_feats(
+                    batch["rgb_imgs"], batch["proj_mats"], batch["cam_positions"]
                 )
-                voxel_inds = self.upsampler.upsample_inds(voxel_logits.C[occupancy])
-                voxel_logits = self.upsampler.upsample_feats(voxel_logits.F[occupancy])
 
-        return voxel_outputs, proj_occ_logits, bp_data, depth_out
+            print("\nFeature stats:")
+            for k, v in feats_2d.items():
+                print(f"{k} shape: {v.shape}")
+                print(f"{k} range: {v.min():.2f} to {v.max():.2f}")
+
+            if not self.depth_head: depth_out = None
+            print("Here 1")
+            device = voxel_inds_16.device
+            proj_occ_logits = {}
+            voxel_outputs = {}
+            bp_data = {}
+            n_subsample = {
+                "medium": 2 ** 14,
+                "fine": 2 ** 16,
+            }
+            print("feats_2d keys:", feats_2d.keys())
+            print("feats_2d['coarse'] shape:", feats_2d["coarse"].shape)
+            print("voxel_inds_16 shape:", voxel_inds_16.shape)
+            voxel_inds = voxel_inds_16
+            # UPDATED
+            # Get the feature dimension from feats_2d["coarse"]
+            feature_dim = feats_2d["coarse"].shape[2]  # Should be 80 based on the debug output
+            voxel_features = torch.zeros(
+                (len(voxel_inds), feature_dim), 
+                dtype=torch.float32,  # Force float32 for stability
+                device=device
+            ).contiguous()  # Ensure contiguous memory
+            
+            voxel_logits = torch.zeros(
+                (len(voxel_inds), 1), 
+                dtype=torch.float32,  # Force float32 for stability
+                device=device
+            ).contiguous()  # Ensure contiguous memory
+
+            print("Here 2")
+            for resname, res in self.resolutions.items():
+                if self.training and resname in n_subsample:  # subsample voxels.
+                    # this saves memory and possibly acts as a data augmentation
+                    subsample_inds = get_subsample_inds(voxel_inds, n_subsample[resname])
+                    voxel_inds = voxel_inds[subsample_inds]
+                    voxel_features = voxel_features[subsample_inds]
+                    voxel_logits = voxel_logits[subsample_inds]
+
+                voxel_batch_inds = voxel_inds[:, 3].long()
+                voxel_coords = voxel_inds[:, :3] * res + batch["origin"][voxel_batch_inds]  # convert to unit of meters
+
+                featheight, featwidth = feats_2d[resname].shape[-2:]
+
+                feat_cha = {'coarse': 80, 'medium': 40, 'fine':24}
+                cv_dim = self.cv_dim - 8
+                if resname != 'medium':
+                    cur_cost_volume = F.interpolate(cost_volume.view([bs*n_imgs*cv_dim, 64, 60, 80]), [featheight, featwidth]).view([bs, n_imgs, cv_dim, 64, featheight, featwidth])
+                else: cur_cost_volume = cost_volume.clone()
+                feats_2d[resname] = self.cv_global_encoder[resname](torch.cat([cur_cost_volume[:,:,-1], feats_2d[resname]], dim=2).view([-1, feat_cha[resname]+64, featheight, featwidth]))
+                feats_2d[resname] = feats_2d[resname].view([bs, n_imgs, feat_cha[resname]+64, featheight, featwidth])
+                overallfeat = feats_2d[resname][:, :, :64].unsqueeze(3).expand([-1, -1, -1, 64, -1, -1])
+                feats_2d[resname] = feats_2d[resname][:,:,64:]
+                # for d in range(64):
+                #     cur_cost_volume[:,:,:,d] = self.unshared_conv[resname][d](
+                #                                 torch.cat([cur_cost_volume[:,:,:,d], feats_2d[resname]], dim=2).view([-1, feat_cha[resname]+7, featheight, featwidth])
+                #                                 ).view([bs, n_imgs, 7, featheight, featwidth])
+                cur_cost_volume = self.unshared_conv[resname](
+                    torch.cat([feats_2d[resname].unsqueeze(3).expand([-1,-1,-1,64,-1,-1]), cur_cost_volume], dim=2).transpose(2,3).reshape(bs*n_imgs,-1,featheight, featwidth))
+                cur_cost_volume = cur_cost_volume.view([bs, n_imgs, 64, 7, featheight, featwidth]).transpose(2,3)
+
+                cur_cost_volume = torch.cat([overallfeat, cur_cost_volume], dim=2)
+
+                bp_uv, bp_depth, bp_mask = self.project_voxels(  # project voxels to each image plane
+                    voxel_coords,
+                    voxel_batch_inds,
+                    batch["proj_mats"][resname].transpose(0, 1),
+                    featheight,
+                    featwidth,
+                )
+                bp_data[resname] = {
+                    "voxel_coords": voxel_coords,
+                    "voxel_batch_inds": voxel_batch_inds,
+                    "bp_uv": bp_uv,
+                    "bp_depth": bp_depth,
+                    "bp_mask": bp_mask,
+                }
+                bp_feats, cur_proj_occ_logits = self.back_project_features(  # put 2dCNN features into voxels.
+                    bp_data[resname],
+                    feats_2d[resname].transpose(0, 1),
+                    self.mv_fusion[resname],
+                    cur_cost_volume if (self.SRCV or self.use_cost_volume) else None,
+                    cv_masks if self.use_cost_volume else None,
+                )
+                proj_occ_logits[resname] = cur_proj_occ_logits
+
+                bp_feats = self.layer_norms[resname](bp_feats)
+
+                print("voxel_features shape before SparseTensor:", voxel_features.shape if len(voxel_features.shape) > 0 else "Empty tensor")
+                print("voxel_inds shape before SparseTensor:", voxel_inds.shape if len(voxel_inds.shape) > 0 else "Empty tensor")
+                print("bp_feats shape:", bp_feats.shape if len(bp_feats.shape) > 0 else "Empty tensor")
+                print("voxel_logits shape:", voxel_logits.shape if len(voxel_logits.shape) > 0 else "Empty tensor")
+
+                # Check if any of the tensors are empty
+                if voxel_features.numel() == 0 or voxel_inds.numel() == 0:
+                    print("Warning: Empty tensors detected before SparseTensor creation")
+                    return voxel_outputs, proj_occ_logits, bp_data, depth_out
+
+                print("Before SparseTensor creation:")
+                print("voxel_features shape:", voxel_features.shape)
+                print("voxel_features dtype:", voxel_features.dtype)
+                print("voxel_inds shape:", voxel_inds.shape)
+                print("voxel_inds dtype:", voxel_inds.dtype)
+                print("voxel_inds min/max:", voxel_inds.min(), voxel_inds.max())
+
+                # Get feature dimensions
+                in_channels = voxel_features.shape[1]
+                bp_channels = bp_feats.shape[1]
+                
+                print(f"\nFeature dimensions for {resname}:")
+                print(f"- Input features: {in_channels}")
+                print(f"- Backprojected features: {bp_channels}")
+                
+                # Ensure proper feature dimensions before concatenation
+                voxel_features = torch.cat([
+                    voxel_features,
+                    bp_feats,
+                    voxel_logits
+                ], dim=1).contiguous()  # Ensure contiguous memory
+                
+                print(f"- Combined features: {voxel_features.shape[1]}")
+                
+                # Create SparseTensor with explicit dimensions
+                voxel_features = torchsparse.SparseTensor(
+                    feats=voxel_features,
+                    coords=voxel_inds.to(torch.int32).contiguous(),  # Ensure contiguous memory
+                    stride=(1, 1, 1)
+                )
+
+                # Ensure proper tensor format before CNN3D
+                voxel_features = torchsparse.SparseTensor(
+                    feats=voxel_features.F.contiguous(),  # Make features contiguous
+                    coords=voxel_features.C.contiguous(), # Make coordinates contiguous
+                    stride=(1, 1, 1)
+                )
+
+                # Print dimensions before CNN3D
+                print(f"\nBefore CNN3D for {resname}:")
+                print(f"- Features shape: {voxel_features.F.shape}")
+                print(f"- Coordinates shape: {voxel_features.C.shape}")
+                print(f"- Feature channels: {voxel_features.F.shape[1]}")
+
+                # Apply CNN3D
+                voxel_features = self.cnns3d[resname](voxel_features)
+
+                voxel_logits = self.output_layers[resname](voxel_features)
+                voxel_outputs[resname] = voxel_logits
+
+                if resname in ["coarse", "medium"]:
+                    # sparsify & upsample
+                    occupancy = voxel_logits.F.squeeze(1) > 0
+                    if not torch.any(occupancy):
+                        print("Here 5")
+                        return voxel_outputs, proj_occ_logits, bp_data, depth_out
+                    voxel_features = self.upsampler.upsample_feats(
+                        voxel_features.F[occupancy]
+                    )
+                    voxel_inds = self.upsampler.upsample_inds(voxel_logits.C[occupancy])
+                    voxel_logits = self.upsampler.upsample_feats(voxel_logits.F[occupancy])
+
+            print("calling forward done")
+            return voxel_outputs, proj_occ_logits, bp_data, depth_out
+
+        except Exception as e:
+            print(f"\nError in CVRecon forward:")
+            print(f"Error occurred during {locals().get('resname', 'initialization')}")
+            print(f"Last tensor shapes:")
+            print(f"- voxel_features: {getattr(voxel_features, 'F', {}).shape if 'voxel_features' in locals() else 'Not created'}")
+            print(f"- voxel_inds: {voxel_inds_16.shape if 'voxel_inds_16' in locals() else 'Not available'}")
+            print(f"Error: {str(e)}")
+            raise e
 
     def losses(self, voxel_logits, voxel_gt, proj_occ_logits, bp_data, depth_imgs, depth_out):
         voxel_losses = {}
         proj_occ_losses = {}
+        
+        # Create mapping between internal names and batch keys
+        resolution_mapping = {
+            'coarse': 'voxel_gt_coarse',
+            'medium': 'voxel_gt_medium',
+            'fine': 'voxel_gt_fine'
+        }
+        
         for resname in voxel_logits:
+            gt_key = resolution_mapping[resname]
+            gt = voxel_gt[gt_key]  # Use correct key to access ground truth
+            
             logits = voxel_logits[resname]
-            gt = voxel_gt[resname]
             cur_loss = torch.zeros(1, device=logits.F.device, dtype=torch.float32)
+            
             if len(logits.C) > 0:
                 pred_hash = spf.sphash(logits.C)
                 gt_hash = spf.sphash(gt.C)
@@ -396,6 +495,7 @@ class cvrecon(torch.nn.Module):
                 good_query = idx_query != -1
                 gt = gt.F[idx_query[good_query]]
                 logits = logits.F.squeeze(1)[good_query]
+                
                 if len(logits) > 0:
                     if resname == "fine":
                         cur_loss = torch.nn.functional.l1_loss(

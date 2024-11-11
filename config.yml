@@ -1,41 +1,56 @@
-n_imgs_train: 20
-n_imgs_val: 20
-n_imgs_test: 20
-crop_size_train: [96, 96, 48]
-crop_size_val: [96, 96, 48]
-crop_size_test: [96, 96, 48]
-attn_heads: 2
-attn_layers: 2
-use_proj_occ: False
+# Number of source images to use during training, validation, and testing
+n_imgs_train: 1
+n_imgs_val: 1
+n_imgs_test: 1
 
-ckpt: null
-wandb_runid: null
+# Reduce crop size to decrease memory usage
+crop_size_train: [48, 48, 24]  # Halved from [96, 96, 48]
+crop_size_val: [48, 48, 24]    # Halved from [96, 96, 48]
+crop_size_test: [48, 48, 24]   # Halved from [96, 96, 48]
 
-seed: 0
-use_amp: True
-nworkers: 8
+# Transformer architecture parameters
+attn_heads: 1  # Number of attention heads in transformer
+attn_layers: 1  # Number of transformer layers
+use_proj_occ: False  # Whether to use projected occupancy features
 
-initial_epochs: 350
-initial_lr: .001
-initial_batch_size: 2
+# Checkpoint and logging settings
+ckpt: null  # Path to checkpoint file for resuming training
+wandb_runid: null  # Weights & Biases run ID for experiment tracking
 
-finetune_epochs: 150
-finetune_lr: .0001
-finetune_batch_size: 1
+# Training configuration
+seed: 0  # Random seed for reproducibility
+use_amp: True  # Whether to use Automatic Mixed Precision
+nworkers: 4  # Number of data loading workers
 
+# Initial training phase parameters
+initial_epochs: 350  # Number of epochs for initial training
+initial_lr: .001  # Initial learning rate
+initial_batch_size: 1  # Batch size for initial training
+
+# Fine-tuning phase parameters
+finetune_epochs: 150  # Number of epochs for fine-tuning
+finetune_lr: .0001  # Learning rate for fine-tuning
+finetune_batch_size: 1  # Batch size for fine-tuning
+
+# Weights & Biases project name
 wandb_project_name: "cvrecon"
 
-scannet_dir: "ScanNet2/cvrecon"
-tsdf_dir: "ScanNet2/cvrecon_gt"
+# Dataset paths
+scannet_dir: "../Datasets/Scannet_preproccess_scannet_output"  # Path to preprocessed ScanNet data
+tsdf_dir: "../Datasets/Scannet_TSDF"  # Path to TSDF (Truncated Signed Distance Function) data
 
-SRfeat: False
-SR_vi_ebd: False
-SRCV: False
+# Feature extraction options
+SRfeat: False  # Whether to use super-resolution features
+SR_vi_ebd: False  # Whether to use super-resolution visual embeddings
+SRCV: False  # Whether to use super-resolution cost volume
 
-cost_volume: True
-cv_dim: 15
-cv_overall: True
+# Cost volume configuration
+cost_volume: True  # Whether to use cost volume
+cv_dim: 15  # Dimension of cost volume features
+cv_overall: True  # Whether to use overall cost volume features
 
-depth_head: False
+# Additional model components
+depth_head: False  # Whether to use depth prediction head
 
-accu_grad: 1
+# Training optimization
+accu_grad: 1  # Gradient accumulation steps

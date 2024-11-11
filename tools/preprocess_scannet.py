@@ -53,19 +53,28 @@ def process_scene(scene_dir_src, scene_dir_dst):
         'frames': []
     }
 
-    if not os.path.exists(scene_dir_dst):
-        os.makedirs(scene_dir_dst)
-    color_dir_dst = os.path.join(scene_dir_dst, 'color')
-    if not os.path.exists(color_dir_dst):
-        os.makedirs(color_dir_dst)
-    depth_dir_dst = os.path.join(scene_dir_dst, 'depth')
-    if not os.path.exists(depth_dir_dst):
-        os.makedirs(depth_dir_dst)
+    dir_exists = os.path.exists(scene_dir_dst)
+    color_dir_exists = os.path.exists(os.path.join(scene_dir_dst, 'color'))
+    depth_dir_exists = os.path.exists(os.path.join(scene_dir_dst, 'depth'))
 
-    # copy ground truth mesh to new folder
+    if dir_exists and color_dir_exists and depth_dir_exists:
+        print(f"Skipping {scene_name} as it already exists.")
+        return
+
+    if not dir_exists:
+        os.makedirs(scene_dir_dst)
+    if not color_dir_exists:
+        os.makedirs(os.path.join(scene_dir_dst, 'color'))
+    if not depth_dir_exists:
+        os.makedirs(os.path.join(scene_dir_dst, 'depth'))
+
+    # copy ground truth mesh to new folder if it doesn't exist
     gt_mesh_src = os.path.join(scene_dir_src, '{}_vh_clean_2.ply'.format(scene_name))
     gt_mesh_dst = os.path.join(scene_dir_dst, '{}_vh_clean_2.ply'.format(scene_name))
-    shutil.copy(gt_mesh_src, gt_mesh_dst)
+    if not os.path.exists(gt_mesh_dst):
+        shutil.copy(gt_mesh_src, gt_mesh_dst)
+    else:
+        print(f"Skipping ground truth mesh for {scene_name} as it already exists.")
     data['gt_mesh'] = gt_mesh_dst
 
     K_color = np.loadtxt(os.path.join(scene_dir_src, 'intrinsic', 'intrinsic_color.txt'))[:3, :3]
@@ -91,8 +100,8 @@ def process_scene(scene_dir_src, scene_dir_dst):
 
         if color.shape[:2] != depth.shape[:2]:      # avoid resizing twice
             color = process_color_image(color, depth, K_color, K_depth)
-            cv2.imwrite(fname_color_dst, color)
-
+            if not os.path.exists(fname_color_dst):
+                cv2.imwrite(fname_color_dst, color)
         elif not os.path.exists(fname_color_dst):
             cv2.imwrite(fname_color_dst, color)
 
@@ -105,7 +114,10 @@ def process_scene(scene_dir_src, scene_dir_dst):
             'pose': P.tolist()
         }
         data['frames'].append(frame)
-    json.dump(data, open(os.path.join(scene_dir_dst, 'info.json'), 'w'))
+    
+    if not os.path.exists(os.path.join(scene_dir_dst, 'info.json')):
+        json.dump(data, open(os.path.join(scene_dir_dst, 'info.json'), 'w'))
+    
     return
 
 

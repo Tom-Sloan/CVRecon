@@ -398,7 +398,15 @@ def get_view_frustum(depth_im, cam_intr, cam_pose):
     """Get corners of 3D camera view frustum of depth image"""
     im_h = depth_im.shape[0]
     im_w = depth_im.shape[1]
+    
+    # Add validation
+    if depth_im.size == 0:
+        print("Warning: Empty depth image")
+        return np.zeros((3, 5))  # Return dummy frustum
+        
+    print("calling max")
     max_depth = np.max(depth_im)
+    print("calling array")
     view_frust_pts = np.array(
         [
             (np.array([0, 0, 0, im_w, im_w]) - cam_intr[0, 2])

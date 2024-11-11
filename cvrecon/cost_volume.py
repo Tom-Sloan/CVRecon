@@ -612,7 +612,9 @@ class CostVolumeManager(nn.Module):
         # for visualisation - ignore 0s in cost volume for minimum
         if return_lowest:
             with torch.no_grad():
+                print("calling argmax")
                 lowest_cost = self.indices_to_disparity(torch.argmax(cost_volume.detach().mean(dim=1), 1), depth_planes_bdhw,)
+                print("calling argmax done")
         else: lowest_cost = 0
 
         return cost_volume, lowest_cost, depth_planes_bdhw, overall_mask_bhw

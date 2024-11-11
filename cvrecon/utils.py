@@ -17,7 +17,9 @@ def log_transform(x, shift=1):
 
 
 def to_vol(inds, vals):
+    print("calling to_vol")
     dims = np.max(inds, axis=0) + 1
+    print("calling nan")
     vol = np.ones(dims) * np.nan
     vol[inds[:, 0], inds[:, 1], inds[:, 2]] = vals
     return vol

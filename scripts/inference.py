@@ -390,7 +390,7 @@ def inference(model, info_file, outfile, n_imgs, cropsize, SRlist=None, scene_na
             info = json.load(f)
         ref_pose = []
         ref_img = []
-        cv_invalid_mask = np.zeros(len(rgb_imgfiles), dtype=np.int)
+        cv_invalid_mask = np.zeros(len(rgb_imgfiles), dtype=np.int32)
         frame2id = {'0'+frame["filename_color"][-9:-4]:i for i, frame in enumerate(info["frames"])}
         for i, fname in enumerate(rgb_imgfiles.copy()):
             if '0' + fname[-9: -4] in CVDict:

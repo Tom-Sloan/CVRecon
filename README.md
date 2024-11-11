@@ -1,3 +1,19 @@
+thomassloan@cmail.carleton.ca
+
+## Original 
+python tools/preprocess_scannet.py --src path/to/scannet_src --dst path/to/new/scannet_dst
+## Modified
+python tools/preprocess_scannet.py --src ../Datasets/Scannet --dst ../Datasets/Scannet_preproccess_scannet_output
+## Original
+python tools/generate_gt.py --data_path path/to/scannet_src --save_name TSDF_OUTPUT_DIR
+# For the test split
+python tools/generate_gt.py --test --data_path path/to/scannet_src --save_name TSDF_OUTPUT_DIR
+## Modified
+python tools/generate_gt.py --data_path ../Datasets/Scannet --save_name ../Datasets/Scannet_TSDF
+# For the test split
+python tools/generate_gt.py --test --data_path ../Datasets/Scannet --save_name ../Datasets/Scannet_TSDF
+
+
 # CVRecon: Rethinking 3D Geometric Feature Learning for Neural Reconstruction
 
 This paper has been accepted by [ICCV 2023](https://iccv2023.thecvf.com)

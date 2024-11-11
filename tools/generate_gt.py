@@ -36,7 +36,7 @@ def parse_args():
 
     # ray multi processes
     parser.add_argument('--n_proc', type=int, default=4, help='#processes launched to process scenes.')
-    parser.add_argument('--n_gpu', type=int, default=2, help='#number of gpus')
+    parser.add_argument('--n_gpu', type=int, default=1, help='#number of gpus')
     parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--loader_num_workers', type=int, default=0)
     return parser.parse_args()

@@ -73,7 +73,9 @@ class MVFusionTransformer(torch.nn.Module):
                 ),
                 dim=0,
             )
+            print("calling softmax")
             weights = torch.softmax(weights, dim=0)
+            print("calling softmax done")
             pooled_features = torch.sum(features * weights[..., None], dim=0)
         else:
             pooled_features = mv_fusion_mean(features, bp_mask)

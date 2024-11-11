@@ -215,7 +215,7 @@ class Dataset(torch.utils.data.Dataset):
         self.cost_volume = cost_volume
         if self.SRfeat or self.SRCV or self.cost_volume:
             self.CVDicts = defaultdict(dict)
-            fname = 'data_splits/ScanNetv2/standard_split/{}_for_cvrecon.txt'.format(split)
+            fname = 'data_splits/ScanNetv2/standard_split/{}.txt'.format(split)
             if split == 'test':
                 fname = 'data_splits/ScanNetv2/standard_split/test_eight_view_deepvmvs_dense.txt'
             with open(fname, 'r') as f:
@@ -319,7 +319,7 @@ class Dataset(torch.utils.data.Dataset):
             if len(selected_frame_inds) < self.n_imgs:
                 # after redundant frame removal we can end up with too few frames--
                 # add some back in
-                # print('!!!!!!!!!!!!!!!!!', len(selected_frame_inds), scene_name)
+                print('!!!!!!!!!!!!!!!!!', len(selected_frame_inds), scene_name)
                 avail_inds = list(set(np.arange(len(pose))) - set(selected_frame_inds))
                 n_needed = self.n_imgs - len(selected_frame_inds)
                 extra_inds = np.random.choice(avail_inds, size=n_needed, replace=False)
@@ -348,7 +348,7 @@ class Dataset(torch.utils.data.Dataset):
         depth_imgfiles = [depth_imgfiles[i] for i in selected_frame_inds]
 
         if self.cost_volume:
-            cv_invalid_mask = np.zeros(len(rgb_imgfiles), dtype=np.int)
+            cv_invalid_mask = np.zeros(len(rgb_imgfiles), dtype=np.int32)
             frame2id = {'0'+frame["filename_color"][-9:-4]:i for i, frame in enumerate(info["frames"])}
             for i, fname in enumerate(rgb_imgfiles.copy()):
                 if '0' + fname[-9: -4] in self.CVDicts[scene_name]:
@@ -404,13 +404,13 @@ class Dataset(torch.utils.data.Dataset):
         seen_04 = tsdf_04 < 0.999
 
         # seems like a bug -- dilation should happen before cropping
-        occ_08 = skimage.morphology.dilation(occ_04, selem=np.ones((3, 3, 3)))  # voxel of size 0.08 meter
+        occ_08 = skimage.morphology.dilation(occ_04, footprint=np.ones((3, 3, 3)))  # voxel of size 0.08 meter
         not_occ_08 = seen_04 & ~occ_08
         occ_08 = occ_08[::2, ::2, ::2]
         not_occ_08 = not_occ_08[::2, ::2, ::2]
         seen_08 = occ_08 | not_occ_08
 
-        occ_16 = skimage.morphology.dilation(occ_08, selem=np.ones((3, 3, 3)))
+        occ_16 = skimage.morphology.dilation(occ_08, footprint=np.ones((3, 3, 3)))
         not_occ_16 = seen_08 & ~occ_16
         occ_16 = occ_16[::2, ::2, ::2]
         not_occ_16 = not_occ_16[::2, ::2, ::2]
@@ -420,7 +420,10 @@ class Dataset(torch.utils.data.Dataset):
 
         depth_imgs = np.empty((len(depth_imgfiles), imheight, imwidth), dtype=np.uint16)
         for i, f in enumerate(depth_imgfiles):
-            depth_imgs[i] = imageio.imread(f)
+            depth_img = imageio.imread(f)
+            print(f"Depth image {i} shape: {depth_img.shape}")
+            print(f"Depth image {i} range: {depth_img.min()}-{depth_img.max()}")
+            depth_imgs[i] = depth_img
         depth_imgs = depth_imgs / np.float32(1000)
         
         if self.SRfeat:
@@ -596,7 +599,9 @@ if __name__ == "__main__":
 
         vals = voxel_gt.F[batch_mask].float()
         vals = vals - vals.min()
+        print("Calling max")
         vals = vals / vals.max()
+        print("Calling jet")
         pcd.colors = o3d.utility.Vector3dVector(plt.cm.jet(vals)[:, :3])
         voxel_gt_pcds.append(pcd)
 
