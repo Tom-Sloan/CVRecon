@@ -8,10 +8,20 @@ import subprocess
 import numpy as np
 import pytorch_lightning as pl
 import torch
+import torchsparse
 import yaml
 from pytorch_lightning.strategies import DDPStrategy
 
 from cvrecon import collate, data, lightningmodel, utils
+
+
+def print_gpu_memory():
+    if torch.cuda.is_available():
+        print("\nGPU Memory Usage:")
+        for i in range(torch.cuda.device_count()):
+            print(f"GPU {i}: {torch.cuda.get_device_properties(i).name}")
+            print(f"- Allocated: {torch.cuda.memory_allocated(i)/1024**2:.1f}MB")
+            print(f"- Cached: {torch.cuda.memory_reserved(i)/1024**2:.1f}MB")
 
 
 if __name__ == "__main__":
@@ -57,21 +67,46 @@ if __name__ == "__main__":
     else:
         amp_kwargs = {"precision": "32-true"}
     
+    # Create model first
     model = lightningmodel.LightningModel(config)
 
+    # Add configuration debug info
+    print("Model configuration:")
+    print(f"- Using {args.devices} devices")
+    print(f"- Batch size: {config['initial_batch_size']}")
+    print(f"- Crop size: {config['crop_size_train']}")
 
+    # Validate data dimensions before trainer setup
+    print("\nValidating data dimensions:")
+    try:
+        sample_batch = next(iter(model.train_dataloader()))
+        print(f"Sample batch keys: {sample_batch.keys()}")
+        for key, value in sample_batch.items():
+            if isinstance(value, torch.Tensor):
+                print(f"- {key}: shape={value.shape}, dtype={value.dtype}")
+            elif isinstance(value, torchsparse.SparseTensor):
+                print(f"- {key}: F={value.F.shape}, C={value.C.shape}, stride={value.stride}")
+    except Exception as e:
+        print(f"Error during data validation: {str(e)}")
+        raise e
+
+    # Add memory tracking
+    print_gpu_memory()
+
+    # Then create trainer with proper settings
     trainer = pl.Trainer(
         accelerator="gpu",
         devices=args.devices,
         logger=logger,
-        max_epochs=config["initial_epochs"] + config["finetune_epochs"] + 300,
+        max_epochs=config["initial_epochs"] + config["finetune_epochs"],
         check_val_every_n_epoch=5,
-        detect_anomaly=False,
+        detect_anomaly=True,  # Add anomaly detection
         callbacks=callbacks,
-        reload_dataloaders_every_n_epochs=1,  # a hack so batch size can be adjusted for fine tuning
+        reload_dataloaders_every_n_epochs=1,
         strategy=DDPStrategy(find_unused_parameters=True),
-        accumulate_grad_batches=1,
+        accumulate_grad_batches=config["accu_grad"],
         num_sanity_val_steps=1,
+        gradient_clip_val=1.0,  # Add gradient clipping
         **amp_kwargs,
     )
 

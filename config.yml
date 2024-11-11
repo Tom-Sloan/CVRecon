@@ -1,16 +1,16 @@
 # Number of source images to use during training, validation, and testing
-n_imgs_train: 1
+n_imgs_train: 1  # Reduced from original to decrease memory usage
 n_imgs_val: 1
 n_imgs_test: 1
 
 # Reduce crop size to decrease memory usage
-crop_size_train: [48, 48, 24]  # Halved from [96, 96, 48]
-crop_size_val: [48, 48, 24]    # Halved from [96, 96, 48]
-crop_size_test: [48, 48, 24]   # Halved from [96, 96, 48]
+crop_size_train: [32, 32, 16]  # Reduced from [96, 96, 48] to decrease memory usage
+crop_size_val: [32, 32, 16]    # Reduced from [96, 96, 48]
+crop_size_test: [32, 32, 16]   # Reduced from [96, 96, 48]
 
 # Transformer architecture parameters
-attn_heads: 1  # Number of attention heads in transformer
-attn_layers: 1  # Number of transformer layers
+attn_heads: 1  # Minimal number of attention heads
+attn_layers: 1  # Minimal number of transformer layers
 use_proj_occ: False  # Whether to use projected occupancy features
 
 # Checkpoint and logging settings
