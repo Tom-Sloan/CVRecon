@@ -4,7 +4,7 @@ n_imgs_test: 2
 crop_size_train: [16, 16, 16]
 crop_size_val: [16, 16, 16]
 crop_size_test: [16, 16, 16]
-attn_heads: 1
+attn_heads: 2
 attn_layers: 2
 use_proj_occ: False
 
