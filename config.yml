@@ -1,0 +1,46 @@
+n_imgs_train: 2
+n_imgs_val: 2
+n_imgs_test: 2
+crop_size_train: [16, 16, 16]
+crop_size_val: [16, 16, 16]
+crop_size_test: [16, 16, 16]
+attn_heads: 1
+attn_layers: 2
+use_proj_occ: False
+
+ckpt: null
+wandb_runid: null
+
+seed: 0
+use_amp: True
+nworkers: 8
+
+initial_epochs: 350
+initial_lr: .001
+initial_batch_size: 2
+
+finetune_epochs: 150
+finetune_lr: .0001
+finetune_batch_size: 1
+
+wandb_project_name: "cvrecon_2"
+
+# Dataset paths
+scannet_dir: "../Datasets/Scannet_preproccess_scannet_output"  # Path to preprocessed ScanNet data
+tsdf_dir: "../Datasets/Scannet_TSDF"  # Path to TSDF (Truncated Signed Distance Function) data
+
+
+SRfeat: False
+SR_vi_ebd: False
+SRCV: False
+
+cost_volume: True
+cv_dim: 15
+cv_overall: True
+
+depth_head: False
+
+accu_grad: 1
+
+model:
+  use_srcv: true
