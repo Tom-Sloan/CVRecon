@@ -12,6 +12,7 @@ import torchvision
 from collections import defaultdict
 
 from cvrecon import utils
+from cvrecon.utils import debug_print
 
 
 img_mean_rgb = np.array([127.71, 114.66, 99.32], dtype=np.float32)
@@ -132,14 +133,14 @@ def load_rgb_imgs(imgfiles, imheight, imwidth, augment=False):
                     img = t(img, *params)
             rgb_imgs[i] = np.array(img, dtype=np.float32) / 255.0
         except (PIL.UnidentifiedImageError, FileNotFoundError, OSError) as e:
-            print(f"\n[WARNING] Skipping corrupted/missing image: {f}")
-            print(f"Error: {str(e)}")
+            debug_print(f"\n[WARNING] Skipping corrupted/missing image: {f}", force=True)
+            debug_print(f"Error: {str(e)}", force=True)
             skipped.append(i)
             # Use a black image as placeholder
             rgb_imgs[i] = np.zeros((imheight, imwidth, 3), dtype=np.float32)
 
     if len(skipped) > len(imgfiles) // 2:
-        print(f"\n[ERROR] Too many corrupted images ({len(skipped)}/{len(imgfiles)}). Skipping this sample.")
+        debug_print(f"\n[ERROR] Too many corrupted images ({len(skipped)}/{len(imgfiles)}). Skipping this sample.", force=True)
         return None
 
     # Apply normalization with their specific mean and std values
@@ -219,6 +220,7 @@ class Dataset(torch.utils.data.Dataset):
         SRfeat=False,
         SRCV=False,
         cost_volume=False,
+        debug=False
     ):
         self.info_files = info_files
         self.n_imgs = n_imgs
@@ -244,6 +246,7 @@ class Dataset(torch.utils.data.Dataset):
                 scan_id, *frame_id = line.split(" ")
                 self.CVDicts[scan_id][frame_id[0]] = frame_id[1:]
         
+        self.debug = debug
 
 
     def __len__(self):
@@ -438,7 +441,7 @@ class Dataset(torch.utils.data.Dataset):
 
         rgb_imgs = load_rgb_imgs(rgb_imgfiles, imheight, imwidth, augment=self.augment)
         if rgb_imgs is None:
-            print(f"\n[WARNING] Skipping sample {ind} due to corrupted images")
+            debug_print(f"\n[WARNING] Skipping sample {ind} due to corrupted images", force=True)
             # Try next sample
             return self.__getitem__((ind + 1) % len(self))
 
@@ -560,11 +563,11 @@ class Dataset(torch.utils.data.Dataset):
 
         # Verify depth values
         if np.isnan(depth_imgs).any():
-            print(f"[WARNING] NaN values found in depth images for scene {scene_name}")
+            debug_print(f"[WARNING] NaN values found in depth images for scene {scene_name}", force=True)
             depth_imgs = np.nan_to_num(depth_imgs, nan=0.0)
         
-        print(f"[DEBUG] Depth stats for scene {scene_name}:")
-        print(f"  min: {depth_imgs.min():.3f}, max: {depth_imgs.max():.3f}")
+        debug_print(f"[DEBUG] Depth stats for scene {scene_name}:", self.debug)
+        debug_print(f"  min: {depth_imgs.min():.3f}, max: {depth_imgs.max():.3f}", self.debug)
 
         return scene
 
@@ -617,58 +620,3 @@ if __name__ == "__main__":
         "medium": 0.08,
         "fine": 0.04,
     }
-
-    # get voxel gt pcds
-    batch_ind = 0
-    voxel_gt_pcds = []
-    for resname, res in resolutions.items():
-        voxel_gt = batch[f"voxel_gt_{resname}"]
-        batch_mask = voxel_gt.C[:, 3] == batch_ind
-        coords = voxel_gt.C[batch_mask, :3] * res + batch["origin"][0]
-        pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(coords.numpy()))
-
-        vals = voxel_gt.F[batch_mask].float()
-        vals = vals - vals.min()
-        vals = vals / vals.max()
-        pcd.colors = o3d.utility.Vector3dVector(plt.cm.jet(vals)[:, :3])
-        voxel_gt_pcds.append(pcd)
-
-    # get depth pcd
-    depth_imgs = batch["depth_imgs"][batch_ind]
-    imheight = depth_imgs.shape[1]
-    imwidth = depth_imgs.shape[2]
-    u = np.arange(imwidth)
-    v = np.arange(imheight)
-    uu, vv = np.meshgrid(u, v)
-    uv = np.c_[uu.flatten(), vv.flatten(), np.ones_like(uu.flatten())]
-    k = batch["intr_fullres"][batch_ind]
-    pix_vecs = uv @ np.linalg.inv(k.T)
-    depth_pts = []
-    for i in range(len(depth_imgs)):
-        pose = batch["pose"][batch_ind][i].numpy()
-        depth = depth_imgs[i].flatten().numpy()
-        valid = depth > 0
-        xyz_cam = pix_vecs[valid] * depth[valid, None]
-        xyz_world = (
-            np.c_[xyz_cam, np.ones((len(xyz_cam), 1))] @ np.linalg.inv(pose).T
-        )[:, :3]
-        depth_pts.append(xyz_world)
-    depth_pts = np.concatenate(depth_pts, axis=0)
-    depth_pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(depth_pts))
-
-    # get gt high res surface
-    batch_mask = batch["voxel_gt_fine"].C[:, 3] == batch_ind
-    coords = batch["voxel_gt_fine"].C[batch_mask, :3].numpy()
-    tsdf = batch["voxel_gt_fine"].F[batch_mask].numpy()
-    tsdf = utils.to_vol(coords, tsdf)
-    mesh = utils.to_mesh(
-        -tsdf,
-        level=0,
-        mask=~np.isnan(tsdf),
-        origin=batch["origin"][batch_ind].numpy(),
-        voxel_size=0.04,
-    )
-    mesh.compute_vertex_normals()
-
-    axes = o3d.geometry.TriangleMesh.create_coordinate_frame()
-    utils.visualize([*voxel_gt_pcds, depth_pcd, mesh, axes])

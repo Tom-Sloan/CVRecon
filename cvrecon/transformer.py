@@ -1,12 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from cvrecon.utils import debug_print
 
 
 class MlpBlock(nn.Module):
     """Transformer MLP block"""
 
-    def __init__(self, in_dim, mlp_dim, out_dim, dropout_rate=0.0):
+    def __init__(self, in_dim, mlp_dim, out_dim, dropout_rate=0.0, debug=False):
         super().__init__()
         self.fc1 = nn.Linear(in_dim, mlp_dim)
         self.fc2 = nn.Linear(mlp_dim, out_dim)
@@ -29,9 +30,9 @@ class MlpBlock(nn.Module):
 
 
 class EncoderBlock(nn.Module):
-    def __init__(self, in_dim, num_heads, mlp_dim, dropout_rate=0.0):
+    def __init__(self, in_dim, num_heads, mlp_dim, dropout_rate=0.0, debug=False):
         super().__init__()
-        
+        self.debug = debug
         self.num_heads = num_heads
         self.attn = nn.MultiheadAttention(
             embed_dim=in_dim,
@@ -42,7 +43,7 @@ class EncoderBlock(nn.Module):
         
         self.norm1 = nn.LayerNorm(in_dim)
         self.norm2 = nn.LayerNorm(in_dim)
-        self.mlp = MlpBlock(in_dim, mlp_dim, in_dim, dropout_rate)
+        self.mlp = MlpBlock(in_dim, mlp_dim, in_dim, dropout_rate, debug=debug)
         self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x, mask=None):
@@ -50,11 +51,11 @@ class EncoderBlock(nn.Module):
         x: [n_imgs, n_voxels, dim] 
         mask: Attention mask
         """
-        print(f"\n[DEBUG] EncoderBlock input:")
-        print(f"  x shape: {x.shape}")
+        debug_print("\n[DEBUG] EncoderBlock input:", self.debug)
+        debug_print(f"  x shape: {x.shape}", self.debug)
         if mask is not None:
-            print(f"  mask shape: {mask.shape}")
-            print(f"  mask dtype: {mask.dtype}")
+            debug_print(f"  mask shape: {mask.shape}", self.debug)
+            debug_print(f"  mask dtype: {mask.dtype}", self.debug)
             
             n_imgs = x.shape[0]
             target_len = x.shape[1]  # L: target/query sequence length
@@ -82,7 +83,7 @@ class EncoderBlock(nn.Module):
                 mask = full_mask.t()  # [S, L]
                 mask = mask.t()  # [L, S] - final shape matches PyTorch's expectation
                 
-            print(f"  reshaped mask shape: {mask.shape}")
+            debug_print(f"  reshaped mask shape: {mask.shape}", self.debug)
 
         residual = x
         x = self.norm1(x)
@@ -104,40 +105,38 @@ class EncoderBlock(nn.Module):
         x = self.mlp(x)
         x = x + residual
         
-        print(f"[DEBUG] EncoderBlock output shape: {x.shape}")
+        debug_print(f"[DEBUG] EncoderBlock output shape: {x.shape}", self.debug)
         return x
 
 
 class Transformer(nn.Module):
-    def __init__(self, emb_dim, mlp_dim, num_layers=1, num_heads=1, dropout_rate=0.0):
+    def __init__(self, emb_dim, mlp_dim, num_layers=1, num_heads=1, dropout_rate=0.0, debug=False):
         super().__init__()
+        self.debug = debug
         self.layers = nn.ModuleList([
-            EncoderBlock(emb_dim, num_heads, mlp_dim, dropout_rate)
+            EncoderBlock(emb_dim, num_heads, mlp_dim, dropout_rate, debug=debug)
             for _ in range(num_layers)
         ])
 
     def forward(self, x, mask=None):
-        """
-        x: [n_imgs, n_voxels, dim]
-        mask: [n_voxels, n_imgs, n_imgs] - Boolean attention mask
-        """
-        print(f"\n[DEBUG] Transformer input:")
-        print(f"  x shape: {x.shape}")
+        debug_print("\n[DEBUG] Transformer input:", self.debug)
+        debug_print(f"  x shape: {x.shape}", self.debug)
         if mask is not None:
-            print(f"  mask shape: {mask.shape}")
+            debug_print(f"  mask shape: {mask.shape}", self.debug)
         
         # Process through transformer layers
         for i, layer in enumerate(self.layers):
-            print(f"\n[DEBUG] Processing transformer layer {i}")
+            debug_print(f"\n[DEBUG] Processing transformer layer {i}", self.debug)
             x = layer(x, mask)
             
-        print(f"[DEBUG] Transformer output shape: {x.shape}")
+        debug_print(f"[DEBUG] Transformer output shape: {x.shape}", self.debug)
         return x, None
 
 
 class CrossTransformer(nn.Module):
     def __init__(self, emb_dim, mlp_dim, num_layers=1, num_heads=1, dropout_rate=0.0):
         super().__init__()
+        self.debug = False
         self.layers = nn.ModuleList([
             CrossAttentionBlock(emb_dim, num_heads, mlp_dim, dropout_rate)
             for _ in range(num_layers)
@@ -145,12 +144,12 @@ class CrossTransformer(nn.Module):
 
     def forward(self, query, key, value, depth_query=None, depth_key=None, mask=None):
         """Cross attention between query and key/value pairs"""
-        print(f"\n[DEBUG] CrossTransformer input:")
-        print(f"  query shape: {query.shape}")
-        print(f"  key shape: {key.shape}")
-        print(f"  value shape: {value.shape}")
+        debug_print("\n[DEBUG] CrossTransformer input:", self.debug)
+        debug_print(f"  query shape: {query.shape}", self.debug)
+        debug_print(f"  key shape: {key.shape}", self.debug)
+        debug_print(f"  value shape: {value.shape}", self.debug)
         if mask is not None:
-            print(f"  mask shape: {mask.shape}")
+            debug_print(f"  mask shape: {mask.shape}", self.debug)
             
         # Ensure query and key have compatible shapes for attention
         if query.shape[1] != key.shape[1]:
@@ -159,16 +158,16 @@ class CrossTransformer(nn.Module):
             
         x = query
         for i, layer in enumerate(self.layers):
-            print(f"\n[DEBUG] Processing cross-transformer layer {i}")
+            debug_print(f"\n[DEBUG] Processing cross-transformer layer {i}", self.debug)
             x = layer(query=x, key=key, value=value, mask=mask)
             
-        print(f"[DEBUG] CrossTransformer output shape: {x.shape}")
+        debug_print(f"[DEBUG] CrossTransformer output shape: {x.shape}", self.debug)
         return x, None
 
 class CrossAttentionBlock(nn.Module):
     def __init__(self, in_dim, num_heads, mlp_dim, dropout_rate=0.0):
         super().__init__()
-        
+        self.debug = False
         self.num_heads = num_heads
         self.attn = nn.MultiheadAttention(
             embed_dim=in_dim,
@@ -188,12 +187,12 @@ class CrossAttentionBlock(nn.Module):
         key, value: [n_imgs, S, dim] where S is source sequence length
         mask: [S, 1, n_imgs] boolean attention mask
         """
-        print(f"\n[DEBUG] CrossAttentionBlock input:")
-        print(f"  query shape: {query.shape}")
-        print(f"  key shape: {key.shape}")
+        debug_print("\n[DEBUG] CrossAttentionBlock input:", self.debug)
+        debug_print(f"  query shape: {query.shape}", self.debug)
+        debug_print(f"  key shape: {key.shape}", self.debug)
         if mask is not None:
-            print(f"  mask shape: {mask.shape}")
-            print(f"  mask dtype: {mask.dtype}")
+            debug_print(f"  mask shape: {mask.shape}", self.debug)
+            debug_print(f"  mask dtype: {mask.dtype}", self.debug)
             
             # For cross-attention:
             # - L is target sequence length (query length)
@@ -211,7 +210,7 @@ class CrossAttentionBlock(nn.Module):
             attn_mask = torch.ones((L, S), dtype=torch.bool, device=mask.device)
             attn_mask = attn_mask & mask.unsqueeze(0)  # Broadcast mask across all queries
                 
-            print(f"  reshaped mask shape: {attn_mask.shape}")
+            debug_print(f"  reshaped mask shape: {attn_mask.shape}", self.debug)
 
         residual = query
         query = self.norm1(query)
@@ -235,5 +234,5 @@ class CrossAttentionBlock(nn.Module):
         x = self.mlp(x)
         x = x + residual
         
-        print(f"[DEBUG] CrossAttentionBlock output shape: {x.shape}")
+        debug_print(f"[DEBUG] CrossAttentionBlock output shape: {x.shape}", self.debug)
         return x

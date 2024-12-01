@@ -10,6 +10,18 @@ import skimage.measure
 import wandb
 
 
+def debug_print(msg, debug=False, force=False):
+    """Centralized debug printing function
+    
+    Args:
+        msg: Message to print
+        debug: Boolean flag to control debug printing
+        force: If True, print regardless of debug setting
+    """
+    if force or debug:
+        print(msg)
+
+
 def log_transform(x, shift=1):
     """rescales TSDF values to weight voxels near the surface more than close
     to the truncation distance"""

@@ -1,6 +1,7 @@
 import torch
 
 from cvrecon import transformer
+from cvrecon.utils import debug_print
 
 
 class MVFusionMean(torch.nn.Module):
@@ -9,13 +10,15 @@ class MVFusionMean(torch.nn.Module):
 
 
 class MVFusionTransformer(torch.nn.Module):
-    def __init__(self, input_depth, n_layers, n_attn_heads, cv_cha=0):
+    def __init__(self, input_depth, n_layers, n_attn_heads, cv_cha=0, debug=False):
         super().__init__()
+        self.debug = debug
         self.transformer = transformer.Transformer(
             input_depth,
             input_depth * 2,
             num_layers=n_layers,
             num_heads=n_attn_heads,
+            debug=debug
         )
         self.depth_mlp = torch.nn.Linear( 1 + cv_cha + 56, input_depth, bias=True)
         self.proj_tsdf_mlp = torch.nn.Linear(input_depth, 1, bias=True)
@@ -25,6 +28,10 @@ class MVFusionTransformer(torch.nn.Module):
             torch.nn.init.zeros_(mlp.bias)
 
     def forward(self, features, bp_depth, bp_mask, use_proj_occ):
+        debug_print("\n[DEBUG] MVFusionTransformer forward:", self.debug)
+        debug_print(f"  Input features shape: {features.shape}", self.debug)
+        debug_print(f"  Input bp_depth shape: {bp_depth.shape}", self.debug)
+        debug_print(f"  Input bp_mask shape: {bp_mask.shape}", self.debug)
         '''
         features: [n_imgs, in_channels, n_voxels]
         bp_depth: [n_imgs, n_voxels]

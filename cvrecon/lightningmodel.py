@@ -52,6 +52,7 @@ class LightningModel(pl.LightningModule):
         self.cvrecon = cvrecon.cvrecon(
             config["attn_heads"], config["attn_layers"], config["use_proj_occ"], config["SRfeat"],
             config["SR_vi_ebd"], config["SRCV"], config["cost_volume"], config["cv_dim"], config["cv_overall"], config["depth_head"],
+            debug=config.get("debug_prints", False)
         )
         self.config = config
 
@@ -128,6 +129,7 @@ class LightningModel(pl.LightningModule):
             SRfeat=self.config["SRfeat"],
             SRCV=self.config["SRCV"],
             cost_volume=self.config["cost_volume"],
+            debug=self.config.get("debug_prints", False)
         )
         return torch.utils.data.DataLoader(
             dset,

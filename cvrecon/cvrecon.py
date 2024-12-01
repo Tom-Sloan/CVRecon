@@ -15,8 +15,9 @@ from cvrecon.cost_volume import ResnetMatchingEncoder, FastFeatureVolumeManager,
 
 
 class cvrecon(torch.nn.Module):
-    def __init__(self, attn_heads, attn_layers, use_proj_occ, SRfeat, SR_vi_ebd, SRCV, use_cost_volume, cv_dim, cv_overall, depth_head):
+    def __init__(self, attn_heads, attn_layers, use_proj_occ, SRfeat, SR_vi_ebd, SRCV, use_cost_volume, cv_dim, cv_overall, depth_head, debug=False):
         super().__init__()
+        self.debug = debug
         self.use_proj_occ = use_proj_occ
         self.n_attn_heads = attn_heads
         self.resolutions = collections.OrderedDict(
@@ -95,6 +96,7 @@ class cvrecon(torch.nn.Module):
             if self.n_attn_heads > 0:
                 self.mv_fusion[resname] = mv_fusion.MVFusionTransformer(
                     cnn2d_output_depths[i], attn_layers, self.n_attn_heads, cv_cha=self.cv_dim,
+                    debug=self.debug
                 )
             else:
                 self.mv_fusion[resname] = mv_fusion.MVFusionMean()
