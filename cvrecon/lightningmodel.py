@@ -1,4 +1,5 @@
 import os
+from collections import defaultdict
 
 import numpy as np
 import open3d as o3d
@@ -55,6 +56,8 @@ class LightningModel(pl.LightningModule):
             debug=config.get("debug_prints", False)
         )
         self.config = config
+        self.train_losses = []
+        self.val_losses = []
 
     def configure_optimizers(self):
         return torch.optim.Adam(
@@ -62,8 +65,41 @@ class LightningModel(pl.LightningModule):
             lr=self.config["initial_lr"],
         )
 
-    # def on_train_epoch_start(self):
-    #     self.epoch_train_logs = []
+    def on_train_epoch_start(self):
+        print(f"\nStarting epoch {self.current_epoch}")
+        self.train_losses = []  # Reset for new epoch
+
+    def on_train_epoch_end(self):
+        # Calculate and print average losses for the epoch
+        if self.train_losses:
+            avg_losses = defaultdict(float)
+            count = len(self.train_losses)
+            for logs in self.train_losses:
+                for key, value in logs.items():
+                    avg_losses[key] += value.item() / count
+            
+            print(f"\nEpoch {self.current_epoch} Training Results:")
+            print("Average losses:")
+            for key, value in avg_losses.items():
+                print(f"  {key}: {value:.4f}")
+
+    def on_validation_epoch_start(self):
+        print(f"\nStarting validation for epoch {self.current_epoch}")
+        self.val_losses = []
+
+    def on_validation_epoch_end(self):
+        # Calculate and print average validation losses
+        if self.val_losses:
+            avg_losses = defaultdict(float)
+            count = len(self.val_losses)
+            for logs in self.val_losses:
+                for key, value in logs.items():
+                    avg_losses[key] += value.item() / count
+            
+            print(f"\nEpoch {self.current_epoch} Validation Results:")
+            print("Average losses:")
+            for key, value in avg_losses.items():
+                print(f"  {key}: {value:.4f}")
 
     def step(self, batch, batch_idx):
         voxel_coords_16 = batch["input_voxels_16"].C
@@ -76,6 +112,14 @@ class LightningModel(pl.LightningModule):
         loss, logs = self.cvrecon.losses(
             voxel_outputs, voxel_gt, proj_occ_logits, bp_data, batch["depth_imgs"], depth_out
         )
+        
+        # Print detailed loss information
+        if self.config.get("debug_prints", False):
+            print("\nLoss breakdown:")
+            for key, value in logs.items():
+                print(f"{key}: {value.item():.4f}")
+            print(f"Total loss: {loss.item():.4f}\n")
+        
         logs["loss"] = loss.detach()
         return loss, logs, voxel_outputs
 
@@ -88,20 +132,19 @@ class LightningModel(pl.LightningModule):
                 group["lr"] = lr
 
         loss, logs, _ = self.step(batch, batch_idx)
-        # self.epoch_train_logs.append(logs)
+        self.train_losses.append(logs)  # Store losses for epoch summary
+        
         for lossname, lossval in logs.items():
             self.log('train/'+lossname, lossval, on_step=True, on_epoch=True, sync_dist=True, reduce_fx='mean', rank_zero_only=True)
         return loss
 
-    # def on_validation_epoch_start(self):
-    #     self.epoch_val_logs = []
-
     def validation_step(self, batch, batch_idx):
         loss, logs, voxel_outputs = self.step(batch, batch_idx)
-        # self.epoch_val_logs.append(logs)
+        self.val_losses.append(logs)  # Store losses for epoch summary
+        
         for lossname, lossval in logs.items():
             self.log('val/'+lossname, lossval, on_step=False, on_epoch=True, sync_dist=True, reduce_fx='mean', rank_zero_only=True)
-        
+
     def train_dataloader(self):
         return self.dataloader("train", augment=True)
 

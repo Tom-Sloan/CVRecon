@@ -38,7 +38,7 @@ cost_volume: True
 cv_dim: 15
 cv_overall: True
 
-depth_head: False
+depth_head: True
 
 accu_grad: 1
 

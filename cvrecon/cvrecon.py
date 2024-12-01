@@ -81,7 +81,7 @@ class cvrecon(torch.nn.Module):
            
         
         if depth_head:
-            self.depth_head = torch.nn.Conv2d(48, 1, 1)
+            self.depth_head = torch.nn.Conv2d(24, 1, 1)
             self.depth_loss = torch.nn.L1Loss()
         else: self.depth_head = False
 
@@ -280,6 +280,7 @@ class cvrecon(torch.nn.Module):
             for b in range(bs):
                 cost_volume[b][batch['cv_invalid_mask'][b].bool()] = 0
 
+        # First get the features
         if self.SRfeat:
             feats_2d = self.get_SR_feats(batch["SRfeat0"], batch["SRfeat1"], batch["SRfeat2"]
             , batch["proj_mats"], batch["cam_positions"])
@@ -287,9 +288,17 @@ class cvrecon(torch.nn.Module):
             feats_2d = self.get_img_feats(
                 batch["rgb_imgs"], batch["proj_mats"], batch["cam_positions"]
             )
-        
-        if not self.depth_head: depth_out = None
-    
+
+        # Now we can do depth prediction with the features
+        depth_out = None
+        if self.depth_head:
+            features = feats_2d["fine"]  # [B, N, C, H, W]
+            B, N = features.shape[:2]
+            features = features.reshape(B*N, -1, features.shape[-2], features.shape[-1])
+            depth_out = self.depth_head(features)  # [B*N, 1, H, W]
+            depth_out = torch.sigmoid(depth_out) * 10.0  
+            depth_out = depth_out.view(B, N, 1, features.shape[-2], features.shape[-1])
+
         device = voxel_inds_16.device
         proj_occ_logits = {}
         voxel_outputs = {}
@@ -434,12 +443,26 @@ class cvrecon(torch.nn.Module):
 
         if depth_out is not None:
             bs, n_imgs = depth_imgs.shape[:2]
-            depth_out = F.interpolate(depth_out, [480, 640], mode="bilinear", align_corners=False,).view([bs, n_imgs, 480, 640]).float()
+            depth_out = depth_out.reshape(bs*n_imgs, 1, depth_out.shape[-2], depth_out.shape[-1])
+            depth_out = F.interpolate(depth_out, size=[480, 640], mode="bilinear", align_corners=False)
+            depth_out = depth_out.reshape(bs, n_imgs, 480, 640).float()
+            
             mask = ((depth_imgs > 0.001) & (depth_imgs < 10))
-            depth_loss = self.depth_loss(depth_out[mask], torch.log(depth_imgs)[mask])
+            depth_loss = self.depth_loss(
+                torch.log(depth_out[mask] + 1e-6), 
+                torch.log(depth_imgs[mask] + 1e-6)
+            )
             loss += depth_loss
             logs.update({'depth_loss': depth_loss.detach()})
 
+            if self.debug:
+                utils.debug_print("\n[DEBUG] Depth loss calculation:", True)
+                utils.debug_print(f"  Depth output shape: {depth_out.shape}", True)
+                utils.debug_print(f"  Valid depth mask sum: {mask.sum()}", True)
+                utils.debug_print(f"  Depth loss: {depth_loss.item():.4f}", True)
+        else:
+            if self.debug:
+                utils.debug_print("[DEBUG] No depth loss calculation since depth_head is False", True)
         return loss, logs
 
     def project_voxels(
@@ -522,13 +545,6 @@ class cvrecon(torch.nn.Module):
                 cur_bp_uv3d = bp_data["bp_uv"][:, batch_mask]
                 cur_bp_uvd = torch.cat([cur_bp_uv3d, cur_bp_d[...,None]], dim=-1).unsqueeze(1).unsqueeze(1)  # [n_imgs, 1, 1, n_voxels, 3]
                 
-                ''' cv mask before grid sample, depreciated
-                cur_srcv = torch.zeros_like(SRCV[batch_ind])  # [n_imgs, ch(128), d(64), h(60), w(80)]
-                cv_mask = cv_masks[batch_ind][:,None,None].expand(cur_srcv.shape)
-                # cur_srcv[~cv_mask] = 100
-                cur_srcv[cv_mask] = SRCV[batch_ind][cv_mask]
-                '''
-
                 
                 # cv_mask = ~cv_masks[batch_ind][:,None].detach()  # invalid costs in the cost_volume
                 # cv_mask = torch.nn.functional.grid_sample(
